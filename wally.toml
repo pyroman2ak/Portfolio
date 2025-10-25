@@ -6,6 +6,7 @@ realm = "shared"
 
 [dependencies]
 Promise = "evaera/promise@4.0.0"
+Bytenet = "ffrostflame/bytenet@0.4.6"
 
 [server-dependencies]
 profileservice = "firebird702/profileservice@1.1.0"

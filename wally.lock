@@ -5,11 +5,16 @@ registry = "test"
 [[package]]
 name = "44780/portfolio"
 version = "0.1.0"
-dependencies = [["Promise", "evaera/promise@4.0.0"], ["profileservice", "firebird702/profileservice@1.1.0"]]
+dependencies = [["Bytenet", "ffrostflame/bytenet@0.4.6"], ["Promise", "evaera/promise@4.0.0"], ["profileservice", "firebird702/profileservice@1.1.0"]]
 
 [[package]]
 name = "evaera/promise"
 version = "4.0.0"
+dependencies = []
+
+[[package]]
+name = "ffrostflame/bytenet"
+version = "0.4.6"
 dependencies = []
 
 [[package]]
