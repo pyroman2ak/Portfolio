@@ -1,7 +1,3 @@
-print("Hello world, from client!")
+local Loader = require(game.ReplicatedStorage.Shared.Framework.loader)
 
-local test = 32
-
-if test == 32 then
-	return
-end
+Loader.LoadClient(script.Engineers)
