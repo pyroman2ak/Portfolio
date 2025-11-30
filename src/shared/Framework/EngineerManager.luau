@@ -17,18 +17,17 @@ function EngineerManager.Create(name: string)
 		Name = name,
 		Init = function() end,
 		Start = function() end,
-		Client = {},
 	}
 
 	Engineers[name] = Engineer
 	return Engineer
 end
 
-function EngineerManager.GetEngine(Name: string)
+function EngineerManager.GetEngineer(Name: string)
 	return Engineers[Name]
 end
 
-function EngineerManager.GetAllEngines()
+function EngineerManager.GetAllEngineers()
 	return Engineers
 end
 

@@ -4,6 +4,10 @@
     "$className": "DataModel",
 
     "ReplicatedStorage": {
+      "Arcane": {
+        "$className": "ModuleScript",
+        "$path": "src/ReplicatedStorage/Arcane.lua"
+      },
       "Shared": {
         "$path": "src/shared"
       },

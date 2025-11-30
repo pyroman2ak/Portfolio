@@ -13,19 +13,6 @@ local Packets = require(script.Parent.Packets)
 local Promise = require(script.Parent.Parent.Parent.Packages.Promise)
 
 --Remote Events
-function Network.Init(Folder: Folder)
-	for _, Packet in ipairs(Folder:GetChildren()) do
-		if Packet:IsA("ModuleScript") then
-			local Success, Result = pcall(require, Packet)
-			if Success and Result then
-				Packets[Packet.Name] = Result
-			else
-				warn(`[Network] Failed to load packet {Packet.Name}: {Result}`)
-			end
-		end
-	end
-end
-
 function Network.GetPacket(Name)
 	return Packets[Name]
 end
@@ -94,7 +81,7 @@ function Network.InvokeClient(Client: Player, Request: string, Data)
 		end
 
 		local RequestID = HttpService:GenerateGUID(false)
-		local promise = Promise.new(function(resolve, reject)
+		local promise = Promise.new(function(resolve)
 			PendingInvokes[RequestID] = resolve
 			Packet.sendTo({
 				_RequestID = RequestID,
@@ -118,7 +105,7 @@ function Network.InvokeServer(Request: string, Data)
 		end
 
 		local RequestID = HttpService:GenerateGUID(false)
-		local promise = Promise.new(function(resolve, reject)
+		local promise = Promise.new(function(resolve)
 			PendingInvokes[RequestID] = resolve
 			Packet.send({
 				_RequestID = RequestID,
@@ -178,6 +165,7 @@ function Network.OnClientInvoke(Request, Callback)
 end
 
 function Network.ClientListen()
+	print("Fah")
 	for name, packet in pairs(Packets) do
 		if name:match("_Response$") and packet.listen then
 			packet.listen(function(data)

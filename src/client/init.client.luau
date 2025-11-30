@@ -1,11 +1,3 @@
-local Loader = require(game.ReplicatedStorage.Shared.Framework.loader)
+local Arcane = require(game.ReplicatedStorage:WaitForChild("Arcane"))
 
-Loader.LoadClient(script.Engineers)
-
-local Network = require(game.ReplicatedStorage.Shared.Framework.network)
-
-Network.ClientListen()
-
-Network.InvokeServer("Test", "Payload"):andThen(function(result)
-	print(result)
-end)
+Arcane.LoadEngineers(script.Engineers)
