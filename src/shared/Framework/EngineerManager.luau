@@ -17,6 +17,7 @@ function EngineerManager.Create(name: string)
 		Name = name,
 		Init = function() end,
 		Start = function() end,
+		Client = {},
 	}
 
 	Engineers[name] = Engineer

@@ -4,9 +4,15 @@
   replaces behaviour for remote events/ remote functions
   Source: https://github.com/ffrostfall/ByteNet
 ]]
-local Network = {}
-local Packets = require(script.Parent.Packets)
+local HttpService = game:GetService("HttpService")
+local RunService = game:GetService("RunService")
 
+local Network = {}
+local PendingInvokes = {}
+local Packets = require(script.Parent.Packets)
+local Promise = require(script.Parent.Parent.Parent.Packages.Promise)
+
+--Remote Events
 function Network.Init(Folder: Folder)
 	for _, Packet in ipairs(Folder:GetChildren()) do
 		if Packet:IsA("ModuleScript") then
@@ -75,6 +81,91 @@ function Network.Listen(Request: string, Callback: (any, Player?) -> ())
 		end)
 	else
 		warn(`[Network] Packet {Request} has no listen function.`)
+	end
+end
+
+--Remote Functions
+function Network.InvokeClient(Client: Player, Request: string, Data)
+	if RunService:IsServer() then
+		local Packet = Network.GetPacket(Request)
+		if not Packet or not Packet.sendTo then
+			warn(`[Network] Invoke function: failed`)
+			return Promise.reject("Invalid Invoke")
+		end
+
+		local RequestID = HttpService:GenerateGUID(false)
+		local promise = Promise.new(function(resolve, reject)
+			PendingInvokes[RequestID] = resolve
+			Packet.sendTo({
+				_RequestID = RequestID,
+				Payload = Data,
+			}, Client)
+		end)
+
+		return promise:timeout(5):catch(function()
+			PendingInvokes[RequestID] = nil
+			warn(`[Network] Invoke timeout: `, Request)
+		end)
+	end
+end
+
+function Network.InvokeServer(Request: string, Data)
+	if RunService:IsClient() then
+		local Packet = Packets[Request]
+		if not Packet or not Packet.send then
+			warn(`[Network] Invoke function: failed`)
+			return Promise.reject("Invalid Invoke")
+		end
+
+		local RequestID = HttpService:GenerateGUID(false)
+		local promise = Promise.new(function(resolve, reject)
+			PendingInvokes[RequestID] = resolve
+			Packet.send({
+				_RequestID = RequestID,
+				Payload = Data,
+			})
+		end)
+
+		return promise:timeout(5):catch(function()
+			PendingInvokes[RequestID] = nil
+			warn(`[Network] Invoke timeout: `, Request)
+		end)
+	end
+end
+
+function Network.OnServerInvoke(Request, Callback)
+	local Packet = Network.GetPacket(Request)
+	if not Packet or not Packet.listen then
+		warn(`[Network] Invoke function: failed`)
+		return
+	end
+
+	Packet.listen(function(Data, Client)
+		local RequestID = Data._RequestID
+		local Result = Callback(Client, Data.Payload)
+
+		local ResponsePacket = Network.GetPacket(Request .. "_Response")
+		if ResponsePacket then
+			ResponsePacket.sendTo({
+				_RequestID = RequestID,
+				Result = Result,
+			}, Client)
+		end
+	end)
+end
+
+function Network.ClientListen()
+	for name, packet in pairs(Packets) do
+		if name:match("_Response$") and packet.listen then
+			packet.listen(function(data)
+				local id = data._RequestID
+				local resolver = PendingInvokes[id]
+				if resolver then
+					PendingInvokes[id] = nil
+					resolver(data.Result)
+				end
+			end)
+		end
 	end
 end
 
