@@ -154,6 +154,29 @@ function Network.OnServerInvoke(Request, Callback)
 	end)
 end
 
+function Network.OnClientInvoke(Request, Callback)
+	local Packet = Network.GetPacket(Request)
+	if not Packet or not Packet.listen then
+		warn(`[Network] Invoke function: failed`)
+		return
+	end
+
+	Packet.listen(function(Data)
+		task.spawn(function()
+			local RequestID = Data._RequestID
+			local Result = Callback(Data.Payload)
+
+			local ResponsePacket = Network.GetPacket(Request .. "_Response")
+			if ResponsePacket then
+				ResponsePacket.send({
+					_RequestID = RequestID,
+					Result = Result,
+				})
+			end
+		end)
+	end)
+end
+
 function Network.ClientListen()
 	for name, packet in pairs(Packets) do
 		if name:match("_Response$") and packet.listen then
