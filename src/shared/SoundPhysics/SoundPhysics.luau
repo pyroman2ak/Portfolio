@@ -147,7 +147,9 @@ function SoundPhysics.AnalyseForListener(EmitterPosition, ListenerPosition, Soun
 			if AlternateRay and AlternateRay.Distance >= AlternateDirection.Magnitude - 0.5 then
 				OpenCount = OpenCount + 1
 			end
-			Pool:Return(AlternateRay)
+			if AlternateRay then
+				Pool:Return(AlternateRay)
+			end
 		end
 		if OpenCount > 0 then
 			OcclusionStrength = OcclusionStrength * (1 - (OpenCount / #Offsets) * 0.6)
@@ -165,16 +167,16 @@ function SoundPhysics.AnalyseForListener(EmitterPosition, ListenerPosition, Soun
 			return
 		end
 
-		local echo = Pool:Get()
-		echo.Position = Hit.Position
-		echo.Distance = Hit.Distance
-		echo.Material = Hit.Material
-		echo.Depth = Depth
+		local echo = {
+			Position = Hit.Position,
+			Distance = Hit.Distance,
+			Material = Hit.Material,
+			Depth = Depth,
+		}
 		table.insert(Echoes, echo)
 
-		Pool:Return(Hit)
-
 		local hitNormal = Hit.Normal
+		Pool:Return(Hit)
 		if hitNormal and hitNormal.Magnitude > 0 then
 			local Normal = hitNormal.Unit
 			local Reflection = Direction - 2 * Direction:Dot(Normal) * Normal
