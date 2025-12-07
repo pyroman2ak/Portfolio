@@ -36,15 +36,18 @@ local function Now()
 end
 
 local Pool = {}
-function Pool:Get()
-	return table.remove(self) or {}
-end
-
-function Pool:Return(Table)
-	for Key in pairs(Table) do
-		Table[Key] = nil
+do
+	local Storage = {}
+	function Pool:Get()
+		return table.remove(Storage) or {}
 	end
-	table.insert(self, Table)
+
+	function Pool:Return(Table)
+		for Key in pairs(Table) do
+			Table[Key] = nil
+		end
+		table.insert(Storage, Table)
+	end
 end
 
 local function CreateRaycastParameters(IgnoreList)
@@ -60,18 +63,13 @@ local function Cast(Origin, Direction, Parameters)
 	if not Result then
 		return nil
 	end
-	local HitPosition = Result.Position
-	local Distance = (HitPosition - Origin).Magnitude
-	local Material = Result.Material
-	local Normal = Result.Normal
-
-	return {
-		Position = HitPosition,
-		Distance = Distance,
-		Material = Material,
-		Instance = Result.Instance,
-		Normal = Normal,
-	}
+	local Hit = Pool:Get()
+	Hit.Position = Result.Position
+	Hit.Distance = (Result.Position - Origin).Magnitude
+	Hit.Material = Result.Material
+	Hit.Instance = Result.Instance
+	Hit.Normal = Result.Normal
+	return Hit
 end
 
 function SoundPhysics.EstimateRoom(Origin, SoundTable)
@@ -93,6 +91,7 @@ function SoundPhysics.EstimateRoom(Origin, SoundTable)
 		if RayResult then
 			Total = Total + RayResult.Distance
 			Count = Count + 1
+			Pool:Return(RayResult)
 		end
 	end
 	if Count == 0 then
@@ -114,8 +113,8 @@ function SoundPhysics.AnalyseForListener(EmitterPosition, ListenerPosition, Soun
 	local IgnoreList = SoundTable.IgnoreList or SoundTable.Ignore or {}
 	local Parameters = CreateRaycastParameters(IgnoreList)
 
-	local PathVec = EmitterPosition - ListenerPosition
-	local RayResult = Cast(ListenerPosition, PathVec, Parameters)
+	local PathVector = EmitterPosition - ListenerPosition
+	local RayResult = Cast(ListenerPosition, PathVector, Parameters)
 
 	local Occluded = false
 	local OcclusionStrength = 0
@@ -125,14 +124,15 @@ function SoundPhysics.AnalyseForListener(EmitterPosition, ListenerPosition, Soun
 		local hitInstance = RayResult.Instance
 		if
 			(hitInstance and hitInstance:IsA("BasePart") and (hitInstance.Position - EmitterPosition).Magnitude < 1)
-			or (RayResult.Distance >= PathVec.Magnitude - 0.5)
+			or (RayResult.Distance >= PathVector.Magnitude - 0.5)
 		then
 			Occluded = false
 		else
 			Occluded = true
 			MaterialProperties = GetMaterialProperties(RayResult.Material)
-			OcclusionStrength = math.clamp(RayResult.Distance / PathVec.Magnitude, 0.15, 0.95)
+			OcclusionStrength = math.clamp(RayResult.Distance / PathVector.Magnitude, 0.15, 0.95)
 		end
+		Pool:Return(RayResult)
 	else
 		Occluded = false
 	end
@@ -142,11 +142,12 @@ function SoundPhysics.AnalyseForListener(EmitterPosition, ListenerPosition, Soun
 		local OpenCount = 0
 		for _, Offset in ipairs(Offsets) do
 			local altOrigin = ListenerPosition + Offset
-			local altDir = EmitterPosition - altOrigin
-			local AlternateRay = Cast(altOrigin, altDir, Parameters)
-			if AlternateRay and AlternateRay.Distance >= altDir.Magnitude - 0.5 then
+			local AlternateDirection = EmitterPosition - altOrigin
+			local AlternateRay = Cast(altOrigin, AlternateDirection, Parameters)
+			if AlternateRay and AlternateRay.Distance >= AlternateDirection.Magnitude - 0.5 then
 				OpenCount = OpenCount + 1
 			end
+			Pool:Return(AlternateRay)
 		end
 		if OpenCount > 0 then
 			OcclusionStrength = OcclusionStrength * (1 - (OpenCount / #Offsets) * 0.6)
@@ -164,12 +165,14 @@ function SoundPhysics.AnalyseForListener(EmitterPosition, ListenerPosition, Soun
 			return
 		end
 
-		table.insert(Echoes, {
-			Position = Hit.Position,
-			Distance = Hit.Distance,
-			Material = Hit.Material,
-			Depth = Depth,
-		})
+		local echo = Pool:Get()
+		echo.Position = Hit.Position
+		echo.Distance = Hit.Distance
+		echo.Material = Hit.Material
+		echo.Depth = Depth
+		table.insert(Echoes, echo)
+
+		Pool:Return(Hit)
 
 		local hitNormal = Hit.Normal
 		if hitNormal and hitNormal.Magnitude > 0 then
@@ -193,11 +196,22 @@ function SoundPhysics.AnalyseForListener(EmitterPosition, ListenerPosition, Soun
 		Reflect(EmitterPosition, dir, 1)
 	end
 
+	local PlainEchoes = {}
+	for _, PlainEcho in ipairs(Echoes) do
+		table.insert(PlainEchoes, {
+			Position = PlainEcho.Position,
+			Distance = PlainEcho.Distance,
+			Material = PlainEcho.Material,
+			Depth = PlainEcho.Depth,
+		})
+		Pool:Return(PlainEcho)
+	end
+
 	return {
 		Occluded = Occluded,
 		OcclusionStrength = OcclusionStrength,
 		MaterialProperties = MaterialProperties,
-		Echoes = Echoes,
+		Echoes = PlainEchoes,
 	}
 end
 
@@ -249,111 +263,108 @@ function SoundPhysics:CreateSound(Part, Settings)
 		RemoteEvent = self.RemoteEvent,
 		Config = self.Config,
 	}
-	setmetatable(
-		Emitter,
-		{
-			__index = {
-				Play = function(self, baseVolume)
-					baseVolume = baseVolume or 1
-					local CurrentTime = Now()
-					if CurrentTime - self.LastUpdate < self.Throttle then
-						self:_SendSimplePlay(baseVolume)
-						return
+	setmetatable(Emitter, {
+		__index = {
+			Play = function(self, baseVolume)
+				baseVolume = baseVolume or 1
+				local CurrentTime = Now()
+				if CurrentTime - self.LastUpdate < self.Throttle then
+					self:_SendSimplePlay(baseVolume)
+					return
+				end
+				self.LastUpdate = CurrentTime
+
+				local Listeners = GetNearestListeners(self.Part.Position, self.Config.MaxListeners)
+
+				for _, Listener in ipairs(Listeners) do
+					local Analysis = SoundPhysics.AnalyseForListener(self.Part.Position, Listener.Position, {
+						MaxEchoes = self.Config.MaxEchoes,
+						IgnoreList = { self.Part },
+						MaxWaves = self.Config.MaxWaves,
+						SampleDistance = self.Config.SampleDistance,
+					})
+
+					local Room = SoundPhysics.EstimateRoom(self.Part.Position, {
+						MaxWaves = math.floor(self.Config.MaxWaves / 3),
+						IgnoreList = { self.Part },
+						SampleDistance = self.Config.SampleDistance,
+					})
+
+					local distance = (Listener.Position - self.Part.Position).Magnitude
+					local delay = distance / (self.Config.SpeedOfSound or Defaults.SpeedOfSound)
+
+					local material = Analysis.MaterialProperties or Materials.Default
+					local gain = baseVolume
+						* (material.volumeMul or 1)
+						* math.clamp(1 - (distance / (self.MaxDistance or self.Config.DefaultMaxDistance)), 0, 1)
+					local lowpass = material.lowpass or Materials.Default.lowpass
+					if Analysis.Occluded then
+						gain = gain * (1 - Analysis.OcclusionStrength)
+						lowpass = lowpass * (1 - Analysis.OcclusionStrength * 0.8)
 					end
-					self.LastUpdate = CurrentTime
 
-					local Listeners = GetNearestListeners(self.Part.Position, self.Config.MaxListeners)
-
-					for _, Listener in ipairs(Listeners) do
-						local Analysis = SoundPhysics.AnalyseForListener(self.Part.Position, Listener.Position, {
-							MaxEchoes = self.Config.MaxEchoes,
-							IgnoreList = { self.Part },
-							MaxWaves = self.Config.MaxWaves,
-							SampleDistance = self.Config.SampleDistance,
-						})
-
-						local Room = SoundPhysics.EstimateRoom(self.Part.Position, {
-							MaxWaves = math.floor(self.Config.MaxWaves / 3),
-							IgnoreList = { self.Part },
-							SampleDistance = self.Config.SampleDistance,
-						})
-
-						local distance = (Listener.Position - self.Part.Position).Magnitude
-						local delay = distance / (self.Config.SpeedOfSound or Defaults.SpeedOfSound)
-
-						local material = Analysis.MaterialProperties or Materials.Default
-						local gain = baseVolume
-							* (material.volumeMul or 1)
-							* math.clamp(1 - (distance / (self.MaxDistance or self.Config.DefaultMaxDistance)), 0, 1)
-						local lowpass = material.lowpass or Materials.Default.lowpass
-						if Analysis.Occluded then
-							gain = gain * (1 - Analysis.OcclusionStrength)
-							lowpass = lowpass * (1 - Analysis.OcclusionStrength * 0.8)
-						end
-
-						local echoes = {}
-						for _, Echo in ipairs(Analysis.Echoes) do
-							local echoDelay = Echo.Distance / (self.Config.SpeedOfSound or Defaults.SpeedOfSound)
-							local echoMat = GetMaterialProperties(Echo.Material)
-							local echoGain = baseVolume * (echoMat.volumeMul or 1) * 0.25 / (1 + Echo.Distance / 20)
-							local echoLow = echoMat.lowpass or Materials.Default.lowpass
-							table.insert(echoes, { Delay = echoDelay, Gain = echoGain, LowpassFreq = echoLow })
-						end
-
-						local payload = {
-							SoundID = self.SoundID,
-							EmitterPosition = self.Part.Position,
-							ListenerPosition = Listener.Position,
-							BaseVolume = baseVolume,
-							Distance = distance,
-							Delay = delay,
-							Gain = gain,
-							LowpassFreq = lowpass,
-							MaxDistance = self.MaxDistance,
-							Occluded = Analysis.Occluded,
-							Occlusion = Analysis.OcclusionStrength,
-							Material = material,
-							Reflections = echoes,
-							RoomAvg = Room.Average,
-							RoomClass = Room.VolumeClass,
-							Timestamp = Now(),
-						}
-
-						if self.RemoteEvent then
-							self.RemoteEvent:FireClient(Listener.Player, payload)
-						end
+					local echoes = {}
+					for _, Echo in ipairs(Analysis.Echoes) do
+						local echoDelay = Echo.Distance / (self.Config.SpeedOfSound or Defaults.SpeedOfSound)
+						local echoMat = GetMaterialProperties(Echo.Material)
+						local echoGain = baseVolume * (echoMat.volumeMul or 1) * 0.25 / (1 + Echo.Distance / 20)
+						local echoLow = echoMat.lowpass or Materials.Default.lowpass
+						table.insert(echoes, { Delay = echoDelay, Gain = echoGain, LowpassFreq = echoLow })
 					end
-				end,
-				_SendSimplePlay = function(self, baseVolume)
-					local Listeners = GetNearestListeners(self.Part.Position, self.Config.MaxListeners)
-					for _, Listener in ipairs(Listeners) do
-						local payload = {
-							SoundID = self.SoundID,
-							EmitterPosition = self.Part.Position,
-							ListenerPosition = Listener.Position,
-							BaseVolume = baseVolume,
-							Distance = (Listener.Position - self.Part.Position).Magnitude,
-							Delay = 0,
-							Gain = baseVolume,
-							LowpassFreq = Materials.Default.lowpass,
-							MaxDistance = self.MaxDistance,
-							Occluded = false,
-							Occlusion = 0,
-							Material = Materials.Default,
-							Echoes = {},
-							RoomAvg = Defaults.SampleDistance,
-							RoomClass = "Open",
-							Timestamp = Now(),
-						}
 
-						if self.RemoteEvent then
-							self.RemoteEvent:FireClient(Listener.Player, payload)
-						end
+					local payload = {
+						SoundID = self.SoundID,
+						EmitterPosition = self.Part.Position,
+						ListenerPosition = Listener.Position,
+						BaseVolume = baseVolume,
+						Distance = distance,
+						Delay = delay,
+						Gain = gain,
+						LowpassFreq = lowpass,
+						MaxDistance = self.MaxDistance,
+						Occluded = Analysis.Occluded,
+						Occlusion = Analysis.OcclusionStrength,
+						Material = material,
+						Reflections = echoes,
+						RoomAvg = Room.Average,
+						RoomClass = Room.VolumeClass,
+						Timestamp = Now(),
+					}
+
+					if self.RemoteEvent then
+						self.RemoteEvent:FireClient(Listener.Player, payload)
 					end
-				end,
-			},
-		}
-	)
+				end
+			end,
+			_SendSimplePlay = function(self, baseVolume)
+				local Listeners = GetNearestListeners(self.Part.Position, self.Config.MaxListeners)
+				for _, Listener in ipairs(Listeners) do
+					local payload = {
+						SoundID = self.SoundID,
+						EmitterPosition = self.Part.Position,
+						ListenerPosition = Listener.Position,
+						BaseVolume = baseVolume,
+						Distance = (Listener.Position - self.Part.Position).Magnitude,
+						Delay = 0,
+						Gain = baseVolume,
+						LowpassFreq = Materials.Default.lowpass,
+						MaxDistance = self.MaxDistance,
+						Occluded = false,
+						Occlusion = 0,
+						Material = Materials.Default,
+						Echoes = {},
+						RoomAvg = Defaults.SampleDistance,
+						RoomClass = "Open",
+						Timestamp = Now(),
+					}
+
+					if self.RemoteEvent then
+						self.RemoteEvent:FireClient(Listener.Player, payload)
+					end
+				end
+			end,
+		},
+	})
 
 	table.insert(self._emitters, Emitter)
 	return Emitter
